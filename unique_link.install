@@ -1,0 +1,93 @@
+<?php
+
+function unique_link_schema() {
+  $schema = array();
+  $schema['unique_link'] = array(
+    'description' => 'List of unique links.',
+    'fields' => array(
+      'lid' => array(
+        'description' => 'The primary identifier for a link',
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'key_code' => array(
+        'description' => 'The unique key that must be associated with this link',
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+      ),
+      'type' => array(
+        'description' => 'Type of unique link determines the callback when it is found',
+        'type' => 'varchar',
+        'length' => 32,
+        'not null' => TRUE,
+      ),
+      'arguments' => array(
+        'description' => 'Information to pass to the callback function',
+        'type' => 'text',
+        'serialize' => TRUE,
+      ),
+      'expire' => array(
+        'description' => 'The date timestamp after which the link is no longer valid.',
+        'type' => 'int',
+        'not null' => TRUE,
+      ),
+    ),
+    'indexes' => array(
+      'keyCode' => array(array('key_code', 10)),
+      'linkType' => array(array('type', 10)),
+    ),
+    'primary key' => array('lid'),
+  );
+  $schema['unique_link_log'] = array(
+    'description' => 'List of attempts to access a given link',
+    'fields' => array(
+      'logid' => array(
+        'description' => 'Log Id',
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'lid' => array(
+        'description' => 'Reference to to lid this action applies to',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'type' => array(
+        'description' => 'Type of access, action granted, denied, expired',
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+      ),
+      'time' => array(
+        'description' => 'The time (unix timestamp) of the access',
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+      'ipaddress' => array(
+        'description' => 'The ip address attempting to access',
+        'type' => 'varchar',
+        'length' => 50,
+      ),
+    ),
+    'indexes' => array(
+      'lid' => array('lid'),
+      'type' => array('type'),
+    ),
+    'primary key' => array('logid'),
+  );
+
+  return $schema;
+}
+
+function unique_link_install() {
+
+  drupal_install_schema('unique_link');
+}
+
+function unique_link_uninstall() {
+  drupal_uninstall_schema('unique_link');
+}

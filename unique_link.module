@@ -1,0 +1,239 @@
+<?php
+
+define(TWO_WEEKS_SECS, 1814400);
+/**
+ * Implementation of hook_menu().
+ */
+function unique_link_menu() {
+  $items = array();
+
+  $items['unln/%unique_link/%'] = array(
+    'title callback' => 'unique_link_title',
+    'title arguments' => array(1),
+    'description' => 'The processor of a unique link',
+    'page callback' => 'unique_link_view',
+    'page arguments' => array(1, 2),
+    'access callback' => TRUE,
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+/**
+ * Function registers all unique_link implementations via
+ * hook_unique_link_info
+ * @staticvar array $implementations
+ * @param type $type
+ * @param type $callback
+ * @param type $reset
+ * @return type
+ */
+function unique_link_info($type = '', $callback = '', $reset = FALSE) {
+  static $implementations = array();
+
+  if (empty($implementations) || $reset) {
+    $implementations = module_invoke_all('unique_link_info');
+  }
+  if ($type != '') {
+    $implementation = $implementations[$type];
+    if ($callback != '') {
+      return $implementation['callbacks'][$callback];
+    }
+    return $implementation;
+  }
+ 
+  return $implementations;
+}
+
+/**
+ * unique_link_view()
+ *
+ * Page callback for when somewhen visits via a unique link
+ */
+function unique_link_view($link, $key) {
+  // Provide callback for any module to check any link
+  foreach (module_implements('unique_link_check') as $name) {
+    $function = $name . '_unique_link_check';
+    $denied = $function($link, $key);
+    if ($denied) {
+      unique_link_log_attempt($link, 'denied');
+      if (function_exists($link->type)) {
+        $function = unique_link_info($link->type, 'denied_page');
+        $function($link);
+      }
+      else {
+        drupal_access_denied();
+      }
+      return;
+    }
+  }
+    
+  $function = unique_link_info($link->type, 'accept');
+  $function($link);
+  unique_link_log_attempt($link, 'accept');
+  $function = unique_link_info($link->type, 'page');
+  $function($link);
+}
+
+/**
+ * Implementation of hook_unique_link_check($link, $key)
+ * @param type $link
+ * @param type $key
+ * @return boolean
+ */
+function unique_link_unique_link_check($link, $key) {
+  if (!is_object($link)) {
+    drupal_set_message(t('Unique linke not in database'), 'error');
+    watchdog('unique_link', 'Unique Link attempted that was not in database', array(), WATCHDOG_NOTICE);
+    return FALSE;
+  }
+  if ($link->key_code != $key) {
+    drupal_set_message(t('Your link did not match the given key. Your link has been disabled'), 'error');
+    watchdog('unique_link', 'Unique link %lid key did not match', array('%lid' => $link->lid), WATCHDOG_NOTICE);
+    return FALSE;
+  }
+  if ($link->expire < time()) {
+    unique_link_log_attempt($link, 'denied');
+    drupal_set_message(t('Your link has expired, and is no longer valid'), 'error');
+    return FALSE;
+  }
+  $history = unique_link_log_history($link->lid);
+  if (!empty($history)) {
+    watchdog('unique_link', 'Tried to access link %lid multiple times', array('%lid' => $link->lid), WATCHDOG_NOTICE);
+    drupal_set_message(t('This link as been used before, and may not be used again.'), 'error');
+    return FALSE;
+  }
+  if (!function_exists($link->type)) {
+    drupal_set_message(t('Your link was valid, but the developer screwed up. No action was taken.'), 'warning');
+    watchdog('unique_link', 'Link of type %type had no callback defined', array('%type' => $link->type), WATCHDOG_NOTICE);
+    return FALSE;
+  }
+}
+
+/**
+ * Implementation of hook_permission().
+ */
+function unique_link_permission() {
+  return array(
+    'administer unique links' => array(
+      'title' => t('Administer Unique Links'),
+      'description' => t('Ability to change, delete, or update unique links'),
+      'restrict access' => TRUE,
+    ),
+  );
+}
+
+/**
+ * Implementation of hook_load().
+ */
+function unique_link_load($params = array(), $reset = FALSE) {
+  static $links = array();
+
+  if ($reset) {
+    $links = array();
+  }
+
+  if (is_numeric($params)) {
+    if (isset($links[$params])) {
+      return is_object($links[$params]) ? drupal_clone($links[$params]) : $links[$params];
+    }
+    $cond = 'l.lid = %d';
+    $arguments[] = $params;
+  }
+  elseif (is_array($params)) {
+    // Turn the conditions into a query.
+    foreach ($param as $key => $value) {
+      $cond[] = 'n.'. db_escape_table($key) ." = '%s'";
+      $arguments[] = $value;
+    }
+    $cond = implode(' AND ', $cond);
+  }
+  else {
+    return FALSE;
+  }
+
+  $fields = drupal_schema_fields_sql('unique_link', 'l');
+  $fields = implode(', ', $fields);
+
+  $link = db_fetch_object(db_query('SELECT '. $fields .' FROM {unique_link} l WHERE '. $cond, $arguments));
+
+  if (is_object($link) && $link->lid) {
+
+    foreach (module_implements('unique_link_load') as $name) {
+      $function = $name . '_unique_link_load';
+      $function($link);
+    }
+    $links[$link->lid] = is_object($link) ? drupal_clone($link) : $link;
+  }
+
+  return $link;
+}
+
+/**
+ * Saves a link.
+ *
+ * @param link - a link object, described in uniqu
+ */
+function unique_link_save($link) {
+  if (!isset($link->expire) || ($link->expire == 0)) {
+    $link->expire = (int) $_SERVER['REQUEST_TIME'] + variable_get('unique_link_expire_dt', TWO_WEEK_SECS);
+  }
+  foreach (module_implements('unique_link_save') as $name) {
+    $function = $name . '_unique_link_save';
+    $function($link);
+  }
+  if (!empty($link->arguments)) {
+    $link->arguments = serialize($link->arguments);
+  }
+  if (empty($link->lid)) {
+    foreach (module_implements('unique_link_insert') as $name) {
+      $function = $name . '_unique_link_insert';
+      $function($link);
+    }
+    drupal_write_record('unique_link', $link);
+  }
+  else {
+    foreach (module_implements('unique_link_update') as $name) {
+      $function = $name . '_unique_link_update';
+      $function($link);
+    }
+    drupal_write_record('unique_link', $link, 'lid');
+  }
+}
+
+function unique_link_log_attempt($link, $type) {
+  $log = new stdClass();
+  $log->lid = $link;
+  $log->type = $type;
+  $log->time = (int) $_SERVER['REQUEST_TIME'];
+  $log->ipaddress = ip_address();
+  drupal_write_record('unique_link_log', $log);
+}
+
+/**
+ * Function to query the history for a link.
+ *
+ * @param int lid The link id for which history to grab
+ * @return array history. An array of history items.
+ */
+function unique_link_log_history($lid) {
+  $history = array();
+  $fields = drupal_schema_fields_sql('unique_link_log', 'l');
+  $fields = implode(', ', $fields);
+  $sql = 'SELCT ' . $fields . ' FROM {unique_link_log} l WHERE l.lid = %d';
+  $result = db_query($sql, $lid);
+  while ($item = db_fetch_object($result)) {
+    $history[] = $item;
+  }
+  return $history;
+}
+
+/**
+ * Function to randomly generate a "key", currently just using built in drupal method.
+ * @param int $length The maximum length of the key
+ * @return string The random key
+ */
+function unique_link_genkey($length = 10) {
+  return user_password($length);
+}

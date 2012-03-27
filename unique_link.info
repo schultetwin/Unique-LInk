@@ -1,0 +1,5 @@
+name = "Unique Link"
+description = "Generates and manages one time links"
+core = 6.x
+package = Other
+
